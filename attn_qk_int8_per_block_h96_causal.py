@@ -49,9 +49,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
 
 configs = [
     triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': wpe}, num_warps=nw, num_stages=ns)
-    for wpe in [1, 2, 3, 4, 5]
-    for nw in [1, 2]
-    for ns in [1, 2, 3]
+    for wpe in [1, 2, 3, 4]
+    for nw in [1, 2, 4, 8]
+    for ns in [1, 2, 3, 4]
 ]
 @triton.autotune(
     list(configs),
