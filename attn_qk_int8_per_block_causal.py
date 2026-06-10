@@ -53,9 +53,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
 
 configs = [
     triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': wpe}, num_warps=nw, num_stages=ns)
-    for nw in[2, 4]
-    for ns in [1, 2, 3, 4]
-    for wpe in [1, 2, 3, 4]
+    for wpe in [1, 2, 3, 4, 5]
+    for nw in [1, 2]
+    for ns in [1, 2, 3]
 ]
 @triton.autotune(
     list(configs), 
@@ -152,4 +152,10 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         h_qo, num_kv_groups,
         HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage)
+        
+#    best_config = _attn_fwd.best_config
+#    waves_per_eu = best_config.kwargs.get('waves_per_eu', 'N/A')
+#    num_warps = best_config.num_warps
+#    num_stages = best_config.num_stages
+#    print(f"[Autotune Best Config] [attn_qk_int8_per_block_causal] waves_per_eu: {waves_per_eu}, num_warps: {num_warps}, num_stages: {num_stages}")
     return o
