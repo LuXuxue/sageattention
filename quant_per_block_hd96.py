@@ -31,7 +31,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale, L,
     tl.store(output_ptrs, x_int8, mask=(offs_n[:, None] < L) & ((tl.arange(0, 128) < 96)[None, :]))
     tl.store(scale_ptrs, scale)
 
-def per_block_int8_hd96(q, k, BLKQ=32, BLKK=16, sm_scale=None, tensor_layout="HND"):
+def per_block_int8_hd96(q, k, BLKQ=128, BLKK=64, sm_scale=None, tensor_layout="HND"):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
 

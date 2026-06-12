@@ -40,7 +40,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         v = tl.load(V_ptrs, mask = (offs_n[:, None] < (kv_len - start_n)) & ((tl.arange(0, 128) < 96)[None, :]))
         p = p.to(tl.float16)
         
-        acc += tl.dot(p, v, out_dtype=tl.float32)
+        acc += tl.dot(p, v, out_dtype=tl.float16)
         m_i = m_ij
         K_ptrs += BLOCK_N * stride_kn
         K_scale_ptr += 1
@@ -48,8 +48,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
     return acc, l_i, m_i
 
 configs = [
-    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': wpe}, num_warps=nw, num_stages=ns)
-    for wpe in [1, 2, 3, 4]
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64}, num_warps=nw, num_stages=ns)
     for nw in [1, 2, 4, 8]
     for ns in [1, 2, 3, 4]
 ]
