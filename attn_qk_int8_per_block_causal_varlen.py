@@ -52,17 +52,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         V_ptrs += BLOCK_N * stride_vn
     return acc, l_i, m_i
 
-configs = [
-    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': wpe}, num_warps=nw, num_stages=ns)
-    for wpe in [1, 2, 3, 4]
-    for nw in [1, 2, 4, 8]
-    for ns in [1, 2, 3, 4]
-]
-@triton.autotune(
-    list(configs),
-    key=['max_seqlen_q', 'kv_len', 'h_qo']
-)
-
 @triton.jit
 def _attn_fwd(Q, K, V, 
               cu_seqlens_q, cu_seqlens_k,
@@ -133,6 +122,8 @@ def _attn_fwd(Q, K, V,
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
 def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=torch.float16):
+    BLOCK_M = 128
+    BLOCK_N = 32
     stage = 3
 
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
@@ -144,7 +135,7 @@ def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale,
     HEAD_DIM_K = head_dim
     num_kv_groups = h_qo // h_kv
 
-    grid = lambda META: (triton.cdiv(max_seqlen_q, META['BLOCK_M']), h_qo, b)
+    grid = (triton.cdiv(max_seqlen_q, BLOCK_M), h_qo, b)
     _attn_fwd[grid](
         q, k, v, cu_seqlens_q, cu_seqlens_k,
         q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
@@ -154,12 +145,9 @@ def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale,
         v.stride(1), v.stride(0), 
         o.stride(1), o.stride(0),
         h_qo, num_kv_groups,
-        HEAD_DIM=HEAD_DIM_K,
-        STAGE=stage)
-        
-#    best_config = _attn_fwd.best_config
-#    waves_per_eu = best_config.kwargs.get('waves_per_eu', 'N/A')
-#    num_warps = best_config.num_warps
-#    num_stages = best_config.num_stages
-#    print(f"[Autotune Best Config] [attn_qk_int8_per_block_causal_varlen] waves_per_eu: {waves_per_eu}, num_warps: {num_warps}, num_stages: {num_stages}")
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
+        STAGE=stage, 
+        num_warps=4 if head_dim == 64 else 8,
+        num_stages=2 if head_dim == 128 else 1,
+        waves_per_eu=3 if head_dim == 64 else 6)
     return o

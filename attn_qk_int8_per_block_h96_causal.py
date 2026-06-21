@@ -47,17 +47,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         V_ptrs += BLOCK_N * stride_vn
     return acc, l_i, m_i
 
-configs = [
-    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': wpe}, num_warps=nw, num_stages=ns)
-    for wpe in [1, 2, 3, 4]
-    for nw in [1, 2, 4, 8]
-    for ns in [1, 2, 3, 4]
-]
-@triton.autotune(
-    list(configs),
-    key=['qo_len', 'kv_len', 'h_qo']
-)
-
 @triton.jit
 def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,  
               stride_qz, stride_qh, stride_qn,  
@@ -109,6 +98,8 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
 
 
 def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16):
+    BLOCK_M = 128
+    BLOCK_N = 32
     stage = 3
 
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
@@ -141,7 +132,7 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
     HEAD_DIM_V = v.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
 
-    grid = lambda META: (triton.cdiv(qo_len, META['BLOCK_M']), b * h_qo, 1)
+    grid = (triton.cdiv(qo_len, BLOCK_M), b * h_qo, 1)
     _attn_fwd[grid](
         q, k, v, q_scale, k_scale, o,  
         stride_bz_q, stride_h_q, stride_seq_q, 
@@ -150,12 +141,9 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         stride_bz_o, stride_h_o, stride_seq_o, 
         h_qo, num_kv_groups, 
         qo_len, kv_len,
-        HEAD_DIM=HEAD_DIM_K,
-        STAGE=stage)
-        
-#    best_config = _attn_fwd.best_config
-#    waves_per_eu = best_config.kwargs.get('waves_per_eu', 'N/A')
-#    num_warps = best_config.num_warps
-#    num_stages = best_config.num_stages
-#    print(f"[Autotune Best Config] [attn_qk_int8_per_block_h96_causal] waves_per_eu: {waves_per_eu}, num_warps: {num_warps}, num_stages: {num_stages}")
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
+        STAGE=stage,  
+        num_warps=8,
+        num_stages=1,
+        waves_per_eu=6)
     return o
