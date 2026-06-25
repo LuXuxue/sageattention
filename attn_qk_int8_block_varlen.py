@@ -4,56 +4,77 @@ import triton.language as tl
 
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
-                    K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
-                    start_m,  
-                    H: tl.constexpr,
-                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
-                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
-                    ):
+K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+start_m,
+H: tl.constexpr,
+BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,
+STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,
+MIN_BLK_N: tl.constexpr
+):
     lo, hi = 0, kv_len
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        k_mask = offs_n[None, :] < (kv_len - start_n)   
-        k = tl.load(K_ptrs, mask = k_mask)
+        k_mask = offs_n[None, :] < (kv_len - start_n)
+        k = tl.load(K_ptrs, mask=k_mask)
         k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
+        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
         qk = qk - m_ij[:, None]
         p = tl.math.exp2(qk)
         l_ij = tl.sum(p, 1)
-        
         alpha = tl.math.exp2(m_i - m_ij)
         l_i = l_i * alpha + l_ij
         
         acc = acc * alpha[:, None]
         
-        v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+        v = tl.load(V_ptrs, mask=offs_n[:, None] < (kv_len - start_n))
         p = p.to(tl.float16)
         
         acc += tl.dot(p, v, out_dtype=tl.float32)
         m_i = m_ij
         K_ptrs += BLOCK_N * stride_kn
-        K_scale_ptr += H
+        K_scale_ptr += (BLOCK_N // MIN_BLK_N) * H
         V_ptrs += BLOCK_N * stride_vn
     return acc, l_i
 
-@triton.jit
-def _attn_fwd(Q, K, V, 
-              cu_seqlens_q, cu_seqlens_k,
-              Q_scale, K_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
-              Out,  
-              stride_qh, stride_qn,
-              stride_kh, stride_kn,  
-              stride_vh, stride_vn,  
-              stride_oh, stride_on,  
-              H: tl.constexpr, num_kv_groups: tl.constexpr,
-              HEAD_DIM: tl.constexpr,  
-              BLOCK_M: tl.constexpr,  
-              BLOCK_N: tl.constexpr,  
-              STAGE: tl.constexpr
-              ):
-    start_m = tl.program_id(0)
+configs = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 6}, num_warps=8, num_stages=2), #gfx1103 Ainma Self
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1103 Anima Cross
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 2}, num_warps=2, num_stages=1), #gfx1103 SDXL Self
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 16, 'waves_per_eu': 6}, num_warps=4, num_stages=1), #gfx1103 SDXL Cross
+#    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1035 Anima
+#    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=2, num_stages=2), #gfx1035 SDXL
+#    triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'waves_per_eu': waves}, num_warps=nw, num_stages=ns)
+#    for bm in [128, 64, 32]
+#    for bn in [64, 32, 16]
+#    if bm > bn
+#    for waves in [1, 2, 3, 4, 6]
+#    for nw in [2, 4, 8]
+#    for ns in [1, 2]
+]
 
+@triton.autotune(
+    list(configs),
+    key=['max_seqlen_q', 'kv_len', 'h_qo']
+)
+@triton.jit
+def _attn_fwd(Q, K, V,
+cu_seqlens_q, cu_seqlens_k,
+Q_scale, K_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
+Out,
+stride_qh, stride_qn,
+stride_kh, stride_kn,
+stride_vh, stride_vn,
+stride_oh, stride_on,
+H: tl.constexpr, num_kv_groups: tl.constexpr,
+HEAD_DIM: tl.constexpr,
+BLOCK_M: tl.constexpr,
+BLOCK_N: tl.constexpr,
+STAGE: tl.constexpr,
+MIN_BLK_M: tl.constexpr,
+MIN_BLK_N: tl.constexpr
+):
+    start_m = tl.program_id(0)
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
 
@@ -68,7 +89,7 @@ def _attn_fwd(Q, K, V,
     cu_seq_lens_q_scale_start = tl.load(cu_seqlens_q_scale + off_z)
     cu_seq_lens_k_scale_start = tl.load(cu_seqlens_k_scale + off_z)    
 
-    q_scale_offset = cu_seq_lens_q_scale_start * H + off_h + start_m * H
+    q_scale_offset = (cu_seq_lens_q_scale_start + start_m * (BLOCK_M // MIN_BLK_M)) * H + off_h
     k_scale_offset = cu_seq_lens_k_scale_start * (H // num_kv_groups) + off_h // num_kv_groups
 
     cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
@@ -85,27 +106,24 @@ def _attn_fwd(Q, K, V,
     K_scale_ptr = K_scale + k_scale_offset
     V_ptrs = V + (cu_seqlens_k_start * stride_vn + (off_h // num_kv_groups) * stride_vh) + offs_n[:, None] * stride_vn + offs_k[None, :]
     O_block_ptr = Out + (cu_seqlens_q_start * stride_on + off_h * stride_oh) + offs_m[:, None] * stride_on + offs_k[None, :]
-    
+
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
-    
-    q = tl.load(Q_ptrs, mask = offs_m[:, None] < qo_len)
+
+    q = tl.load(Q_ptrs, mask=offs_m[:, None] < qo_len)
     q_scale = tl.load(Q_scale_ptr)
     acc, l_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
-                                    start_m,  
-                                    H // num_kv_groups,
-                                    BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                    4 - STAGE, offs_m, offs_n 
-                                    )
+                                start_m,  
+                                H // num_kv_groups,
+                                BLOCK_M, HEAD_DIM, BLOCK_N,  
+                                4 - STAGE, offs_m, offs_n, MIN_BLK_N
+                                )
     acc = acc / l_i[:, None]
-    tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
+    tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask=(offs_m[:, None] < qo_len))
 
 def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale, output_dtype=torch.float16):
-    BLOCK_M = 128
-    BLOCK_N = 32
     stage = 1
-
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
 
     b = cu_seqlens_q.shape[0] - 1
@@ -115,7 +133,7 @@ def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale,
     HEAD_DIM_K = head_dim
     num_kv_groups = h_qo // h_kv
 
-    grid = (triton.cdiv(max_seqlen_q, BLOCK_M), h_qo, b)
+    grid = lambda META: (triton.cdiv(max_seqlen_q, META['BLOCK_M']), h_qo, b)
     _attn_fwd[grid](
         q, k, v, cu_seqlens_q, cu_seqlens_k,
         q_scale, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale,
@@ -125,9 +143,19 @@ def forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, q_scale, k_scale,
         v.stride(1), v.stride(0), 
         o.stride(1), o.stride(0),
         h_qo, num_kv_groups,
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
-        STAGE=stage,  
-        num_warps=4 if head_dim == 64 else 8,
-        num_stages=2 if head_dim == 128 else 1,
-        waves_per_eu=3 if head_dim == 64 else 6)
+        HEAD_DIM=HEAD_DIM_K,
+        STAGE=stage,
+        MIN_BLK_M=32,
+        MIN_BLK_N=16)
+        
+#    best_config = getattr(_attn_fwd, 'best_config', None)
+#    if best_config is not None:
+#        config_kwargs = best_config.kwargs if hasattr(best_config, 'kwargs') else best_config.all_kwargs()
+#        bm = config_kwargs.get('BLOCK_M')
+#        bn = config_kwargs.get('BLOCK_N')
+#        waves = config_kwargs.get('waves_per_eu')
+#        num_warps = best_config.num_warps
+#        num_stages = best_config.num_stages
+#        print(f"[Autotune Best Config] [attn_qk_int8_block_varlen] BLOCK_M: {bm}, BLOCK_N: {bn}, waves_per_eu: {waves}, num_warps: {num_warps}, num_stages: {num_stages}")
+        
     return o
