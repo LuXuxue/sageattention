@@ -4,16 +4,15 @@ import triton.language as tl
 
 @triton.jit
 def quant_per_block_int8_kernel(Input, Output, Scale,
-                                cu_seqlens_input, cu_seqlens_scale,
-                                stride_ih, stride_in,
-                                stride_oh, stride_on,
-                                sm_scale,
-                                H: tl.constexpr,
-                                C: tl.constexpr, BLK: tl.constexpr):
+cu_seqlens_input, cu_seqlens_scale,
+stride_ih, stride_in,
+stride_oh, stride_on,
+sm_scale,
+H: tl.constexpr,
+C: tl.constexpr, BLK: tl.constexpr, MIN_BLK: tl.constexpr):
     off_blk = tl.program_id(0)
     off_h = tl.program_id(1)
     off_b = tl.program_id(2)
-
     cu_seqlens_input_start = tl.load(cu_seqlens_input + off_b)
     cu_seqlens_input_end = tl.load(cu_seqlens_input + off_b + 1)
 
@@ -21,7 +20,7 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
 
     if (off_blk * BLK) >= L:
         return
-    
+
     cu_seqlens_scale_start = tl.load(cu_seqlens_scale + off_b)
 
     offs_n = off_blk * BLK + tl.arange(0, BLK)
@@ -29,22 +28,28 @@ def quant_per_block_int8_kernel(Input, Output, Scale,
 
     input_ptrs = Input + cu_seqlens_input_start * stride_in + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
     output_ptrs = Output + cu_seqlens_input_start * stride_on + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
-    scale_ptrs = Scale + cu_seqlens_scale_start * H + off_h + off_blk * H
+    
+    RATIO: tl.constexpr = BLK // MIN_BLK
+    scale_offs = off_blk * RATIO + tl.arange(0, RATIO)
+    max_scale_idx = tl.cdiv(L, MIN_BLK)
+    scale_mask = scale_offs < max_scale_idx
+    
+    scale_ptrs = Scale + (cu_seqlens_scale_start + scale_offs) * H + off_h
 
     x = tl.load(input_ptrs, mask=offs_n[:, None] < L)
     x = x.to(tl.float32)
     x *= sm_scale
     scale = tl.max(tl.abs(x)) / 127.
+    scale = tl.maximum(scale, 1e-12)
     x_int8 = x / scale
     x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
     x_int8 = x_int8.to(tl.int8)
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L)
-    tl.store(scale_ptrs, scale)
+    tl.store(scale_ptrs, scale, mask=scale_mask)
 
-def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, BLKQ=128, BLKK=32, sm_scale=None):
+def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, BLKQ=128, BLKK=64, sm_scale=None):
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
-
     h_qo = q.shape[1]
     h_kv = k.shape[1]
     head_dim = q.shape[-1]
@@ -53,8 +58,11 @@ def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
     q_batch_len = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
     k_batch_len = cu_seqlens_k[1:] - cu_seqlens_k[:-1]
 
-    q_scale_len = (q_batch_len + BLKQ - 1) // BLKQ
-    k_scale_len = (k_batch_len + BLKK - 1) // BLKK
+    MIN_BLKQ = 32
+    MIN_BLKK = 16
+
+    q_scale_len = (q_batch_len + MIN_BLKQ - 1) // MIN_BLKQ
+    k_scale_len = (k_batch_len + MIN_BLKK - 1) // MIN_BLKK
 
     cu_seqlens_q_scale = torch.nn.functional.pad(torch.cumsum(q_scale_len, dim=0), (1, 0), value=0)
     cu_seqlens_k_scale = torch.nn.functional.pad(torch.cumsum(k_scale_len, dim=0), (1, 0), value=0)
@@ -72,7 +80,7 @@ def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
         q.stride(1), q.stride(0),
         q_int8.stride(1), q_int8.stride(0),
         sm_scale=(sm_scale * 1.44269504), H=h_qo,
-        C=head_dim, BLK=BLKQ
+        C=head_dim, BLK=BLKQ, MIN_BLK=MIN_BLKQ
     )
 
     grid = ((max_seqlen_k + BLKK - 1) // BLKK, h_kv, b)
@@ -82,7 +90,7 @@ def per_block_int8(q, k, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
         k.stride(1), k.stride(0),
         k_int8.stride(1), k_int8.stride(0),
         sm_scale=1.0, H=h_kv,
-        C=head_dim, BLK=BLKK
+        C=head_dim, BLK=BLKK, MIN_BLK=MIN_BLKK
     )
 
     return q_int8, q_scale, k_int8, k_scale, cu_seqlens_q_scale, cu_seqlens_k_scale
