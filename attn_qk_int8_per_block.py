@@ -1,3 +1,5 @@
+import os
+import json
 import torch, math
 import triton
 import triton.language as tl
@@ -36,21 +38,45 @@ MIN_BLK_N: tl.constexpr
         V_ptrs += BLOCK_N * stride_vn
     return acc, l_i
 
-configs = [
-    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 6}, num_warps=8, num_stages=2), #gfx1103 Ainma Self
-    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1103 Anima Cross
-    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 2}, num_warps=2, num_stages=1), #gfx1103 SDXL Self
-    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 16, 'waves_per_eu': 6}, num_warps=4, num_stages=1), #gfx1103 SDXL Cross
-#    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1035 Anima
-#    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=2, num_stages=2), #gfx1035 SDXL
-#    triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'waves_per_eu': waves}, num_warps=nw, num_stages=ns)
-#    for bm in [128, 64, 32]
-#    for bn in [64, 32, 16]
-#    if bm > bn
-#    for waves in [1, 2, 3, 4, 6]
-#    for nw in [2, 4, 8]
-#    for ns in [1, 2]
-]
+env_config_json = os.environ.get('FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON')
+AUTOTUNE = os.environ.get("FLASH_ATTENTION_TRITON_AMD_AUTOTUNE", "0").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+if env_config_json:
+    env_config = json.loads(env_config_json)
+    configs = [
+        triton.Config(
+            {
+                'BLOCK_M': env_config['BLOCK_M'],
+                'BLOCK_N': env_config['BLOCK_N'],
+                'waves_per_eu': env_config['waves_per_eu']
+            },
+            num_warps=env_config['num_warps'],
+            num_stages=env_config['num_stages']
+        )
+    ]
+else:
+    if not AUTOTUNE:
+        configs = [
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 6}, num_warps=8, num_stages=2), #gfx1103 Ainma Self
+            triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1103 Anima Cross
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 2}, num_warps=2, num_stages=1), #gfx1103 SDXL Self
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 16, 'waves_per_eu': 6}, num_warps=4, num_stages=1), #gfx1103 SDXL Cross
+            #triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1035 Anima
+            #triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=2, num_stages=2), #gfx1035 SDXL
+        ]
+    else:
+        configs = [
+            triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'waves_per_eu': waves}, num_warps=nw, num_stages=ns)
+            for bm in [128, 64, 32]
+            for bn in [64, 32, 16]
+            if bm > bn
+            for waves in [1, 2, 3, 4, 6]
+            for nw in [2, 4, 8]
+            for ns in [1, 2]
+        ]
 
 @triton.autotune(
     list(configs),
@@ -144,14 +170,15 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         MIN_BLK_M=32,
         MIN_BLK_N=16)
     
-#    best_config = getattr(_attn_fwd, 'best_config', None)
-#    if best_config is not None:
-#        config_kwargs = best_config.kwargs if hasattr(best_config, 'kwargs') else best_config.all_kwargs()
-#        bm = config_kwargs.get('BLOCK_M')
-#        bn = config_kwargs.get('BLOCK_N')
-#        waves = config_kwargs.get('waves_per_eu')
-#        num_warps = best_config.num_warps
-#        num_stages = best_config.num_stages
-#        print(f"[Autotune Best Config] [attn_qk_int8_per_block] BLOCK_M: {bm}, BLOCK_N: {bn}, waves_per_eu: {waves}, num_warps: {num_warps}, num_stages: {num_stages}")
+    if AUTOTUNE:
+        best_config = getattr(_attn_fwd, 'best_config', None)
+        if best_config is not None:
+            config_kwargs = best_config.kwargs if hasattr(best_config, 'kwargs') else best_config.all_kwargs()
+            bm = config_kwargs.get('BLOCK_M')
+            bn = config_kwargs.get('BLOCK_N')
+            waves = config_kwargs.get('waves_per_eu')
+            num_warps = best_config.num_warps
+            num_stages = best_config.num_stages
+            print(f"[Autotune Best Config] [attn_qk_int8_per_block] BLOCK_M: {bm}, BLOCK_N: {bn}, waves_per_eu: {waves}, num_warps: {num_warps}, num_stages: {num_stages}")
 
     return o
