@@ -111,16 +111,21 @@ def get_fwd_prefill_configs(autotune: bool):
                 ]
         elif arch.name == "gfx1103":
             return [
-                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=8, num_stages=2,), #Anima
+                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=8, num_stages=2,), #Anima Self
+                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=8, num_stages=3,), #Anima Cross
                 triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=4, num_stages=2,), #SDXL Self
-                triton.Config({"BLOCK_M": 64, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=2, num_stages=1,), #SDXL Cross
+                triton.Config({"BLOCK_M": 64, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 1,}, num_warps=2, num_stages=1,), #SDXL Cross Short
+                triton.Config({"BLOCK_M": 64, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 3,}, num_warps=2, num_stages=1,), #SDXL Cross Long
             ]
         elif arch.name == "gfx1035":
             return [
                 triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 1,}, num_warps=4, num_stages=2,), #SDXL Self
-                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 1,}, num_warps=4, num_stages=1,), #SDXL Cross Short
-                triton.Config({"BLOCK_M": 32, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=2, num_stages=1,), #SDXL Cross Long
-                triton.Config({"BLOCK_M": 64, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=4, num_stages=2,), #Anima is slower than sub-quadratic cross attention
+                #triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=4, num_stages=2,), #SDXL Self Backup
+                triton.Config({"BLOCK_M": 32, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=2, num_stages=1,), #SDXL Cross Short
+                #triton.Config({"BLOCK_M": 32, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=2, num_stages=1,), #SDXL Cross Short Backup
+                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 1,}, num_warps=4, num_stages=1,), #SDXL Cross Long
+                #triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=4, num_stages=1,), #SDXL Cross Long Backup
+                triton.Config({"BLOCK_M": 64, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=4, num_stages=2,), #Anima
             ]
         elif arch.is_rdna:
             BLOCK_N = 64 if arch.name == "gfx1100" else 32
