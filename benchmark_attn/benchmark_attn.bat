@@ -19,5 +19,5 @@ ren benchmark_attn-manually.txt benchmark_attn-manually.txt.bak
 for /F "usebackq delims=" %%C in ("benchmark_attn_config.txt") do (
 	set "FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON=%%C"
 	echo !FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON!>>benchmark_attn-manually.txt
-	%python_embeded_path%\python.exe benchmark_attn.py>>benchmark_attn-manually.txt
+	%python_embeded_path%\python.exe benchmark_attn_lite.py>>benchmark_attn-manually.txt
 )
