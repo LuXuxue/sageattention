@@ -24,8 +24,8 @@ if env_config_json:
 else:
     if not AUTOTUNE:
         configs = [
-            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16}, num_warps=4, num_stages=2), #gtx1650
-            triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16}, num_warps=2, num_stages=2), #gtx1650
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16}, num_warps=4, num_stages=2), #gtx1650, SDXL
+            triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16}, num_warps=2, num_stages=2), #gtx1650, Anima
         ]
     else:
         configs = [

@@ -27,9 +27,9 @@ else:
         configs = [
             triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 6}, num_warps=8, num_stages=2), #gfx1103 Ainma Self
             triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=2, num_stages=2), #gfx1103 Anima Cross
-            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 4}, num_warps=2, num_stages=1), #gfx1103 SDXL Self
-            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=8, num_stages=3), #gfx1103 SDXL Cross Short
-            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2}, num_warps=4, num_stages=3), #gfx1103 SDXL Cross Long
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 3}, num_warps=2, num_stages=1), #gfx1103 SDXL Self
+            triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 6}, num_warps=2, num_stages=4), #gfx1103 SDXL Cross Short
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 1}, num_warps=2, num_stages=3), #gfx1103 SDXL Cross Long
             #triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #gfx1035 Anima
             #triton.Config({'BLOCK_M': 128, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=4, num_stages=2), #gfx1035 SDXL Self & Cross Long
             #triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2}, num_warps=2, num_stages=1), #gfx1035 SDXL Cross Short

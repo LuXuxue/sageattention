@@ -33,9 +33,9 @@ if not HAS_FA and not HAS_SAGE:
 # ==========================================
 # 2. 核心计算函数
 # ==========================================
-def calculate_tflops(b, h, sq, sk, d, time_ms):
-    """计算 Attention 的 TFLOPS"""
-    flops = 4 * b * h * sq * sk * d
+def calculate_tflops(b, h_q, sq, sk, d, time_ms):
+    """计算 Attention 的 TFLOPS (支持 GQA，计算量由 Query Heads 决定)"""
+    flops = 4 * b * h_q * sq * sk * d
     tflops = flops / (time_ms / 1000.0) / 1e12
     return tflops
 
@@ -61,22 +61,27 @@ def benchmark(func, q, k, v, warmup=10, iters=50):
 # 3. 定义测试用例
 # ==========================================
 test_cases = [
-    # 1. SDXL
-    ("SDXL_Self_1", 1, 10, 5120, 5120, 64),
-    ("SDXL_Self_2", 1, 20, 1280, 1280, 64),
-    ("SDXL_Self_3", 1, 10, 11520, 11520, 64),
-    ("SDXL_Self_4", 1, 20, 2880, 2880, 64),
-    ("SDXL_Cross_Short_1", 1, 10, 5120, 77, 64),
-    ("SDXL_Cross_Short_2", 1, 20, 1280, 77, 64),
-    ("SDXL_Cross_Short_3", 1, 10, 11520, 77, 64),
-    ("SDXL_Cross_Short_4", 1, 20, 2880, 77, 64),
-    ("SDXL_Cross_Long_1", 1, 10, 5120, 154, 64),
-    ("SDXL_Cross_Long_2", 1, 20, 1280, 154, 64),
-    ("SDXL_Cross_Long_3", 1, 10, 11520, 154, 64),
-    ("SDXL_Cross_Long_4", 1, 20, 2880, 154, 64),
-    # 2. Anima
-    ("Anima_Self", 1, 16, 7680, 7680, 128),
-    ("Anima_Cross", 1, 16, 7680, 512, 128),
+    # 1. SDXL (MHA: h_q == h_kv)(Self1=长/16×宽/16, Self2=Self1/4。例：1024×1280 -> 1024/16*1280/16=5120)
+    ("SDXL_Self_1", 1, 10, 10, 4096, 4096, 64),
+    ("SDXL_Self_2", 1, 20, 20, 1024, 1024, 64),
+    ("SDXL_Self_3", 1, 10, 10, 9216, 9216, 64),
+    ("SDXL_Self_4", 1, 20, 20, 2304, 2304, 64),
+    ("SDXL_Cross_Short_1", 1, 10, 10, 4096, 77, 64),
+    ("SDXL_Cross_Short_2", 1, 20, 20, 1024, 77, 64),
+    ("SDXL_Cross_Short_3", 1, 10, 10, 9216, 77, 64),
+    ("SDXL_Cross_Short_4", 1, 20, 20, 2304, 77, 64),
+    ("SDXL_Cross_Long_1", 1, 10, 10, 4096, 154, 64),
+    ("SDXL_Cross_Long_2", 1, 20, 20, 1024, 154, 64),
+    ("SDXL_Cross_Long_3", 1, 10, 10, 9216, 154, 64),
+    ("SDXL_Cross_Long_4", 1, 20, 20, 2304, 154, 64),
+    
+    # 2. Anima (MHA: h_q == h_kv)(Self=长/16×宽/16。例：1280×1536 -> 1280/16*1536/16=7680)
+    ("Anima_Self", 1, 16, 16, 4096, 4096, 128),
+    ("Anima_Cross", 1, 16, 16, 4096, 512, 128),
+    
+    # 3. Krea2 (GQA: h_q = 48, h_kv = 12)
+    #("Krea2_Self", 1, 48, 12, 7797, 7797, 128),
+    #("Krea2_Cross", 1, 48, 12, 117, 117, 128),
 ]
 
 # ==========================================
@@ -90,10 +95,10 @@ def run_benchmarks():
     print(f"{'Shape':<20} | {'Backend':<10} | {'TFLOPS':<6}")
     print("-" * 50)
 
-    for name, b, h, sq, sk, d in test_cases:
-        q = torch.randn(b, sq, h, d, device=device, dtype=dtype)
-        k = torch.randn(b, sk, h, d, device=device, dtype=dtype)
-        v = torch.randn(b, sk, h, d, device=device, dtype=dtype)
+    for name, b, h_q, h_kv, sq, sk, d in test_cases:
+        q = torch.randn(b, sq, h_q, d, device=device, dtype=dtype)
+        k = torch.randn(b, sk, h_kv, d, device=device, dtype=dtype)
+        v = torch.randn(b, sk, h_kv, d, device=device, dtype=dtype)
         
         # --- 测试 FlashAttention ---
         if HAS_FA:
@@ -101,7 +106,7 @@ def run_benchmarks():
                 return flash_attn_func(q, k, v, causal=False)
             
             fa_time = benchmark(fa_func, q, k, v)
-            fa_tflops = calculate_tflops(b, h, sq, sk, d, fa_time)
+            fa_tflops = calculate_tflops(b, h_q, sq, sk, d, fa_time)
             print(f"{name:<20} | {'FlashAttn':<10} | {fa_tflops:<6.2f}")
             
         # --- 测试 SageAttention ---
@@ -113,7 +118,7 @@ def run_benchmarks():
                     return sageattn(q, k, v)
             
             sage_time = benchmark(sage_func, q, k, v)
-            sage_tflops = calculate_tflops(b, h, sq, sk, d, sage_time)
+            sage_tflops = calculate_tflops(b, h_q, sq, sk, d, sage_time)
             print(f"{name:<20} | {'SageAttn':<10} | {sage_tflops:<6.2f}")
         
         # 清理显存
