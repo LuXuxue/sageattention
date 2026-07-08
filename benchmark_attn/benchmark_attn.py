@@ -81,22 +81,20 @@ def benchmark(func, q, k, v, warmup=10, iters=50):
 # ==========================================
 test_cases = [
     # 1. SDXL (MHA: h_q == h_kv)(Self1=长/16×宽/16, Self2=Self1/4。例：1024×1280 -> 1024/16*1280/16=5120)
-    ("SDXL_Self_1", 1, 10, 10, 4096, 4096, 64),
-    ("SDXL_Self_2", 1, 20, 20, 1024, 1024, 64),
-    ("SDXL_Self_3", 1, 10, 10, 9216, 9216, 64),
-    ("SDXL_Self_4", 1, 20, 20, 2304, 2304, 64),
-    ("SDXL_Cross_Short_1", 1, 10, 10, 4096, 77, 64),
-    ("SDXL_Cross_Short_2", 1, 20, 20, 1024, 77, 64),
-    ("SDXL_Cross_Short_3", 1, 10, 10, 9216, 77, 64),
-    ("SDXL_Cross_Short_4", 1, 20, 20, 2304, 77, 64),
-    ("SDXL_Cross_Long_1", 1, 10, 10, 4096, 154, 64),
-    ("SDXL_Cross_Long_2", 1, 20, 20, 1024, 154, 64),
-    ("SDXL_Cross_Long_3", 1, 10, 10, 9216, 154, 64),
-    ("SDXL_Cross_Long_4", 1, 20, 20, 2304, 154, 64),
+    ("SDXL_Self_1", 2, 10, 10, 4096, 4096, 64),
+    ("SDXL_Self_2", 2, 20, 20, 1024, 1024, 64),
+    ("SDXL_Self_3", 2, 10, 10, 9216, 9216, 64),
+    ("SDXL_Self_4", 2, 20, 20, 2304, 2304, 64),
+    ("SDXL_Cross_1", 2, 10, 10, 4096, 77, 64),
+    ("SDXL_Cross_2", 2, 20, 20, 1024, 77, 64),
+    ("SDXL_Cross_3", 2, 10, 10, 9216, 77, 64),
+    ("SDXL_Cross_4", 2, 20, 20, 2304, 77, 64),
     
     # 2. Anima (MHA: h_q == h_kv)(Self=长/16×宽/16。例：1280×1536 -> 1280/16*1536/16=7680)
-    ("Anima_Self", 1, 16, 16, 4096, 4096, 128),
-    ("Anima_Cross", 1, 16, 16, 4096, 512, 128),
+    ("Anima_Self_1", 1, 16, 16, 4096, 4096, 128),
+    ("Anima_Self_2", 1, 16, 16, 9216, 9216, 128),
+    ("Anima_Cross_1", 1, 16, 16, 4096, 512, 128),
+    ("Anima_Cross_2", 1, 16, 16, 9216, 512, 128),
     
     # 3. Krea2 (GQA: h_q = 48, h_kv = 12)
     #("Krea2_Self", 1, 48, 12, 7797, 7797, 128),
@@ -111,10 +109,6 @@ def run_benchmarks():
     dtype = torch.float16
     THRESHOLD = 0.05  # 设定 0.05 为宽松误差阈值
     
-    # 打印表头
-    print(f"{'Shape': <20} | {'Backend': <10} | {'Time(ms)': <8} | {'TFLOPS': <6} | {'Speedup': <8} | {'MaxErr': <8} | {'MSE': <10} | {'CosSim': <8} | {'Status': <6} ")
-    print("-" * 110)
-
     for name, b, h_q, h_kv, sq, sk, d in test_cases:
         # 分离初始化 Q 与 K/V 的 Heads 数量以支持 GQA
         q = torch.randn(b, sq, h_q, d, device=device, dtype=dtype)
@@ -137,7 +131,7 @@ def run_benchmarks():
         sdpa_time = benchmark(sdpa_func, q, k, v)
         sdpa_tflops = calculate_tflops(b, h_q, sq, sk, d, sdpa_time)
         
-        print(f"{name: <20} | {'SDPA(Base)': <10} | {sdpa_time: <8.3f} | {sdpa_tflops: <6.2f} | {'Baseline': <6} | {'-': <8} | {'-': <10} | {'-': <8} | {'-': <6} ")
+        print(f"{name: <15} | {'SDPA(Base)': <10} | {sdpa_time: <8.3f} | {sdpa_tflops: <6.2f} | {'Baseline': <6} | {'-': <8} | {'-': <10} | {'-': <8} | {'-': <6} ")
         
         # --- 测试 FlashAttention ---
         if HAS_FA:
@@ -152,7 +146,7 @@ def run_benchmarks():
             speedup_fa = sdpa_time / fa_time
             status = "FAIL " if fa_max > THRESHOLD else "OK "
             
-            print(f"{name: <20} | {'FlashAttn': <10} | {fa_time: <8.3f} | {fa_tflops: <6.2f} | {speedup_fa: <8.2f}x| {fa_max: <8.6f} | {fa_mse: <10.8f} | {fa_cos: <8.6f} | {status: <6} ")
+            print(f"{name: <15} | {'FlashAttn': <10} | {fa_time: <8.3f} | {fa_tflops: <6.2f} | {speedup_fa: <8.2f}x| {fa_max: <8.6f} | {fa_mse: <10.8f} | {fa_cos: <8.6f} | {status: <6} ")
             
         # --- 测试 SageAttention ---
         if HAS_SAGE:
@@ -170,9 +164,8 @@ def run_benchmarks():
             speedup_sage = sdpa_time / sage_time
             status = "FAIL " if sage_max > THRESHOLD else "OK "
             
-            print(f"{name: <20} | {'SageAttn': <10} | {sage_time: <8.3f} | {sage_tflops: <6.2f} | {speedup_sage: <8.2f}x| {sage_max: <8.6f} | {sage_mse: <10.8f} | {sage_cos: <8.6f} | {status: <6} ")
+            print(f"{name: <15} | {'SageAttn': <10} | {sage_time: <8.3f} | {sage_tflops: <6.2f} | {speedup_sage: <8.2f}x| {sage_max: <8.6f} | {sage_mse: <10.8f} | {sage_cos: <8.6f} | {status: <6} ")
             
-        print("-" * 110)
         
         # 清理显存
         del q, k, v, ref_out
@@ -182,4 +175,5 @@ def run_benchmarks():
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":
+    print(f"{'Shape': <15} | {'Backend': <10} | {'Time(ms)': <8} | {'TFLOPS': <6} | {'Speedup': <8} | {'MaxErr': <8} | {'MSE': <10} | {'CosSim': <8} | {'Status': <6} ")
     run_benchmarks()
