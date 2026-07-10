@@ -9,15 +9,12 @@ import os
 import logging
 from collections.abc import Callable, Sequence
 
-# ================= Constants =================
 LOG2_E = 1.44269504088896340736
 DEFAULT_PV_ACCUM_DTYPE = os.getenv("SAGEATTN_DEFAULT_PV_ACCUM_DTYPE", "fp32").lower()
 if DEFAULT_PV_ACCUM_DTYPE not in ("fp32", "fp16", "fp16+fp32"):
     DEFAULT_PV_ACCUM_DTYPE = "fp32"
-
 _logger = logging.getLogger(__name__)
 
-# ================= Triton Configs & Environment Variables =================
 arch = str(triton.runtime.driver.active.get_current_target().arch).strip()
 env_config_json = os.environ.get('FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON')
 if env_config_json:
@@ -72,12 +69,7 @@ _TRITON_AUTOTUNE_CONFIGS = tuple(
     (cfg.kwargs['BLOCK_M'], cfg.kwargs['BLOCK_N'], cfg.kwargs.get('waves_per_eu', None), cfg.num_warps, cfg.num_stages)
     for cfg in _TRITON_CONFIGS
 )
-
 _TRITON_AUTOTUNE_CACHE: dict[object, tuple[int, int, int, int, int]] = {}
-
-# ================= Helper Functions =================
-def _env_flag_enabled(name: str) -> bool:
-    return os.getenv(name, "0").lower() in ("1", "true", "yes", "on")
 
 def _padded_head_dim(head_dim: int) -> int:
     if head_dim < 64: return 64
@@ -105,14 +97,6 @@ def _lse_correction(q: torch.Tensor, km: torch.Tensor, tensor_layout: str, head_
         correction = torch.matmul(q, km_broadcast.transpose(2, 3)).squeeze(-1)
     return correction.to(torch.float32)
 
-_AUTOTUNE_SEQ_LEN_BUCKETS = (16, 32, 64, 128, 256)
-
-def _autotune_seq_len_bucket(seq_len: int) -> int:
-    if seq_len <= 0: return seq_len
-    for bucket_size in _AUTOTUNE_SEQ_LEN_BUCKETS:
-        if seq_len <= bucket_size: return bucket_size
-    return triton.cdiv(seq_len, _AUTOTUNE_SEQ_LEN_BUCKETS[-1]) * _AUTOTUNE_SEQ_LEN_BUCKETS[-1]
-
 def _shared_memory_limit(device: torch.device) -> int:
     props = torch.cuda.get_device_properties(device)
     return getattr(props, "shared_memory_per_block_optin", props.shared_memory_per_block)
@@ -128,7 +112,7 @@ def _logical_shape_autotune_key(q: torch.Tensor, k: torch.Tensor, tensor_layout:
         raise ValueError("tensor_layout must be 'NHD' or 'HND'.")
     return (
         batch_size, num_qo_heads, num_kv_heads,
-        _autotune_seq_len_bucket(qo_len), _autotune_seq_len_bucket(kv_len), head_dim,
+        qo_len, kv_len, head_dim,
     )
 
 def _tensor_stride_layout_key(tensor: torch.Tensor, tensor_layout: str) -> tuple[int, ...]:
@@ -221,7 +205,6 @@ def _eager_triton_autotune_select(
         return _sageattn_triton_configured(q, k, v, tensor_layout, is_causal, pv_accum_dtype, smooth_k, return_lse, config)
     return _eager_autotune_select(configs, _TRITON_AUTOTUNE_CACHE, key, benchmark)
 
-# ================= Triton Kernels =================
 @triton.autotune(
     configs=[triton.Config({}, num_warps=4), triton.Config({}, num_warps=8)],
     key=["L_BUCKET", "C", "BLK", "HAS_MEAN"],
@@ -239,26 +222,20 @@ def quant_per_block_int8_kernel(
     off_b = tl.program_id(2)
     offs_n = off_blk * BLK + tl.arange(0, BLK)
     offs_k = tl.arange(0, C)
-    
     input_ptrs = Input + off_b * stride_iz + off_h * stride_ih + offs_n[:, None] * stride_in + offs_k[None, :]
     output_ptrs = Output + off_b * stride_oz + off_h * stride_oh + offs_n[:, None] * stride_on + offs_k[None, :]
     scale_ptrs = Scale + off_b * stride_sz + off_h * stride_sh + off_blk
-    
     x = tl.load(input_ptrs, mask=offs_n[:, None] < L, eviction_policy='evict_first')
     x = x.to(tl.float32)
-    
     if HAS_MEAN:
         mean_ptrs = Mean + off_b * stride_mz + off_h * stride_mh + offs_k * stride_mk
         mean = tl.load(mean_ptrs).to(tl.float32)
         x -= mean[None, :]
-        
     x *= sm_scale
-    
     scale = tl.max(tl.abs(x)) / 127.0
     x_int8 = x / scale
     x_int8 += 0.5 * tl.where(x_int8 >= 0, 1, -1)
     x_int8 = x_int8.to(tl.int8)
-    
     tl.store(output_ptrs, x_int8, mask=offs_n[:, None] < L, eviction_policy='evict_first')
     tl.store(scale_ptrs, scale, eviction_policy='evict_first')
 
@@ -288,16 +265,13 @@ def _attn_fwd_inner(
             start_n = tl.multiple_of(start_n, BLOCK_N)
             k = tl.load(K_ptrs, eviction_policy='evict_first')
             k_scale = tl.load(K_scale_ptr, eviction_policy='evict_first')
-            
             qk = tl.dot(q, k, out_dtype=tl.int32).to(tl.float32) * (q_scale * k_scale)
-            
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
             p = tl.math.exp2(qk)
             l_ij = tl.sum(p, 1)
             alpha = tl.math.exp2(m_i - m_ij)
             l_i = l_i * alpha + l_ij
-            
             v = tl.load(V_ptrs, eviction_policy='evict_first')
             p = p.to(tl.float16)
             if PV_ACCUM_FP32:
@@ -305,11 +279,9 @@ def _attn_fwd_inner(
             else:
                 acc = acc * alpha[:, None] + tl.dot(p, v, out_dtype=tl.float16)
             m_i = m_ij
-            
             K_ptrs += BLOCK_N * stride_kn
             K_scale_ptr += 1
             V_ptrs += BLOCK_N * stride_vn
-            
         start_n = num_full_blocks * BLOCK_N
         if start_n < kv_len:
             k_mask = offs_n[None, :] < (kv_len - start_n)
@@ -317,14 +289,12 @@ def _attn_fwd_inner(
             k_scale = tl.load(K_scale_ptr, eviction_policy='evict_first')
             qk = tl.dot(q, k, out_dtype=tl.int32).to(tl.float32) * (q_scale * k_scale)
             qk = tl.where(k_mask, qk, float("-inf"))
-            
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
             p = tl.math.exp2(qk)
             l_ij = tl.sum(p, 1)
             alpha = tl.math.exp2(m_i - m_ij)
             l_i = l_i * alpha + l_ij
-            
             v_mask = offs_n[:, None] < (kv_len - start_n)
             v = tl.load(V_ptrs, mask=v_mask, other=0.0, eviction_policy='evict_first')
             p = p.to(tl.float16)
@@ -340,19 +310,16 @@ def _attn_fwd_inner(
             k = tl.load(K_ptrs, mask=k_mask, eviction_policy='evict_first')
             k_scale = tl.load(K_scale_ptr, eviction_policy='evict_first')
             qk = tl.dot(q, k, out_dtype=tl.int32).to(tl.float32) * (q_scale * k_scale)
-            
             mask = k_mask
             if STAGE == 2:
                 mask &= offs_m[:, None] >= (start_n + offs_n[None, :])
             qk += tl.where(mask, 0, float("-inf"))
-            
             m_ij = tl.maximum(m_i, tl.max(qk, 1))
             qk -= m_ij[:, None]
             p = tl.math.exp2(qk)
             l_ij = tl.sum(p, 1)
             alpha = tl.math.exp2(m_i - m_ij)
             l_i = l_i * alpha + l_ij
-            
             v = tl.load(V_ptrs, mask=offs_n[:, None] < (kv_len - start_n), eviction_policy='evict_first')
             p = p.to(tl.float16)
             if PV_ACCUM_FP32:
@@ -360,11 +327,9 @@ def _attn_fwd_inner(
             else:
                 acc = acc * alpha[:, None] + tl.dot(p, v, out_dtype=tl.float16)
             m_i = m_ij
-            
             K_ptrs += BLOCK_N * stride_kn
             K_scale_ptr += 1
             V_ptrs += BLOCK_N * stride_vn
-
     return acc, l_i, m_i
 
 @triton.jit
@@ -380,28 +345,22 @@ def _attn_fwd(
     start_m = tl.program_id(0)
     off_z = tl.program_id(2).to(tl.int64)
     off_h = tl.program_id(1).to(tl.int64)
-    
     q_scale_offset = (off_z * H + off_h) * tl.cdiv(qo_len, BLOCK_M)
     k_scale_offset = (off_z * (H // num_kv_groups) + off_h // num_kv_groups) * tl.cdiv(kv_len, BLOCK_N)
-    
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, HEAD_DIM)
-    
     Q_ptrs = Q + (off_z * stride_qz + off_h * stride_qh) + offs_m[:, None] * stride_qn + offs_k[None, :]
     Q_scale_ptr = Q_scale + q_scale_offset + start_m
     K_ptrs = K + (off_z * stride_kz + (off_h // num_kv_groups) * stride_kh) + offs_n[None, :] * stride_kn + offs_k[:, None]
     K_scale_ptr = K_scale + k_scale_offset
     V_ptrs = V + (off_z * stride_vz + (off_h // num_kv_groups) * stride_vh) + offs_n[:, None] * stride_vn + offs_k[None, :]
     O_block_ptr = Out + (off_z * stride_oz + off_h * stride_oh) + offs_m[:, None] * stride_on + offs_k[None, :]
-    
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32) + 1.0
     acc = tl.zeros([BLOCK_M, HEAD_DIM], dtype=tl.float32)
-    
     q = tl.load(Q_ptrs, mask=offs_m[:, None] < qo_len, eviction_policy='evict_last')
     q_scale = tl.load(Q_scale_ptr, eviction_policy='evict_last')
-    
     if IS_CAUSAL:
         acc, l_i, m_i = _attn_fwd_inner(
             acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, start_m,
@@ -416,23 +375,19 @@ def _attn_fwd(
             acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, start_m,
             BLOCK_M, HEAD_DIM, BLOCK_N, 0, IS_CAUSAL, PV_ACCUM_FP32, offs_m, offs_n,
         )
-        
     acc = acc / l_i[:, None]
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask=(offs_m[:, None] < qo_len), eviction_policy='evict_last')
-    
     if RETURN_LSE:
         lse_ptrs = Lse + (off_z * qo_len * H + off_h * qo_len) + offs_m
         l_i = tl.log2(l_i) + m_i
         tl.store(lse_ptrs, l_i, mask=(offs_m < qo_len), eviction_policy='evict_first')
 
-# ================= Python Wrappers =================
 def per_block_int8(
     q: torch.Tensor, k: torch.Tensor, km: torch.Tensor | None = None,
-    BLKQ: int = 128, BLKK: int = 64, sm_scale: float = 1.0, tensor_layout: str = "HND",
+    BLKQ: int = 32, BLKK: int = 16, sm_scale: float = 1.0, tensor_layout: str = "HND",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     q_int8 = torch.empty(q.shape, dtype=torch.int8, device=q.device)
     k_int8 = torch.empty(k.shape, dtype=torch.int8, device=k.device)
-    
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
@@ -451,27 +406,23 @@ def per_block_int8(
         if km is not None: km = km.squeeze(1)
     else:
         raise ValueError(f"Unknown tensor layout: {tensor_layout}")
-        
     has_mean = km is not None
     mean = km if has_mean else k
     stride_bz_m, stride_h_m, stride_k_m = (mean.stride(0), mean.stride(1), mean.stride(2)) if has_mean else (0, 0, 0)
-    
     q_blocks = triton.cdiv(qo_len, BLKQ)
     k_blocks = triton.cdiv(kv_len, BLKK)
     q_scale = torch.empty((b, h_qo, q_blocks), device=q.device, dtype=torch.float32)
     k_scale = torch.empty((b, h_kv, k_blocks), device=q.device, dtype=torch.float32)
-    
     grid = (q_blocks, h_qo, b)
     quant_per_block_int8_kernel[grid](
-        q, q, q_int8, q_scale, qo_len, _autotune_seq_len_bucket(qo_len),
+        q, q, q_int8, q_scale, qo_len, qo_len,
         stride_bz_q, stride_h_q, stride_seq_q, 0, 0, 0,
         stride_bz_qo, stride_h_qo, stride_seq_qo, q_scale.stride(0), q_scale.stride(1),
         sm_scale=sm_scale, C=head_dim, BLK=BLKQ, HAS_MEAN=False,
     )
-    
     grid = (k_blocks, h_kv, b)
     quant_per_block_int8_kernel[grid](
-        k, mean, k_int8, k_scale, kv_len, _autotune_seq_len_bucket(kv_len),
+        k, mean, k_int8, k_scale, kv_len, kv_len,
         stride_bz_k, stride_h_k, stride_seq_k, stride_bz_m, stride_h_m, stride_k_m,
         stride_bz_ko, stride_h_ko, stride_seq_ko, k_scale.stride(0), k_scale.stride(1),
         sm_scale=1.0, C=head_dim, BLK=BLKK, HAS_MEAN=has_mean,
@@ -482,12 +433,11 @@ def _attn_forward(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     q_scale: torch.Tensor, k_scale: torch.Tensor,
     tensor_layout: str = "HND", is_causal: bool = False, pv_accum_dtype: str = "fp32",
-    BLOCK_M: int = 128, BLOCK_N: int = 64, attn_num_warps: int = 4, attn_num_stages: int = 3,
+    BLOCK_M: int = 32, BLOCK_N: int = 16, attn_num_warps: int = 4, attn_num_stages: int = 3,
     waves_per_eu: int | None = None,
     output_dtype: torch.dtype = torch.float16, return_lse: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
-    
     if tensor_layout == "HND":
         b, h_qo, qo_len, head_dim = q.shape
         _, h_kv, kv_len, _ = k.shape
@@ -504,15 +454,12 @@ def _attn_forward(
         stride_bz_o, stride_h_o, stride_seq_o = o.stride(0), o.stride(2), o.stride(1)
     else:
         raise ValueError(f"tensor_layout {tensor_layout} not supported")
-        
     if is_causal and qo_len != kv_len:
         raise ValueError("qo_len and kv_len must be equal for causal attention")
     if h_qo % h_kv != 0:
         raise ValueError("num_qo_heads must be divisible by num_kv_heads")
     num_kv_groups = h_qo // h_kv
-    
     lse = torch.empty([b, h_qo, qo_len], dtype=torch.float32, device=q.device) if return_lse else torch.empty([0], dtype=torch.float32, device=q.device)
-    
     grid = (triton.cdiv(qo_len, BLOCK_M), h_qo, b)
     launch_kwargs = {
         "num_warps": attn_num_warps,
@@ -520,7 +467,6 @@ def _attn_forward(
     }
     if waves_per_eu is not None and waves_per_eu > 0:
         launch_kwargs["waves_per_eu"] = waves_per_eu
-
     _attn_fwd[grid](
         q, k, v, q_scale, k_scale, o, lse,
         stride_bz_q, stride_h_q, stride_seq_q, stride_bz_k, stride_h_k, stride_seq_k,
@@ -533,7 +479,6 @@ def _attn_forward(
     )
     return o, lse
 
-# ================= Main API =================
 SageAttnResult = Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]
 
 @overload
@@ -580,25 +525,19 @@ def _sageattn_triton_configured(
     if q.device != k.device or q.device != v.device: raise ValueError("All tensors must be on the same device.")
     if q.dtype != k.dtype or q.dtype != v.dtype: raise ValueError("All tensors must have the same dtype.")
     if k.shape != v.shape: raise ValueError("k and v must have the same shape.")
-    
     head_dim, q, k, v = _pad_qkv(q, k, v)
     if q.stride(-1) != 1 or k.stride(-1) != 1 or v.stride(-1) != 1:
         raise ValueError("Last dimension of q, k, and v must be contiguous.")
-        
     sm_scale = head_dim**-0.5
     seq_dim_index = 1 if tensor_layout == "NHD" else 2
     head_dim_index = 2 if tensor_layout == "NHD" else 1
-    
     km = k.mean(dim=seq_dim_index, keepdim=True) if smooth_k else None
     if pv_accum_dtype not in ("fp32", "fp16"):
         raise ValueError("pv_accum_dtype must be 'fp32' or 'fp16'.")
-        
     block_m, block_n, waves_per_eu, attn_num_warps, attn_num_stages = triton_config
-    
     q_int8, q_scale, k_int8, k_scale = per_block_int8(
         q, k, km=km, BLKQ=block_m, BLKK=block_n, sm_scale=sm_scale * LOG2_E, tensor_layout=tensor_layout,
     )
-    
     output, lse = _attn_forward(
         q_int8, k_int8, v.to(torch.float16), q_scale, k_scale,
         tensor_layout=tensor_layout, is_causal=is_causal, pv_accum_dtype=pv_accum_dtype,
@@ -607,12 +546,10 @@ def _sageattn_triton_configured(
         waves_per_eu=waves_per_eu,
         output_dtype=dtype, return_lse=return_lse,
     )
-    
     output = output[..., :head_dim]
     if cast_back_to_fp32: output = output.to(torch.float32)
     if not return_lse:
         return output
-        
     lse /= LOG2_E
     if smooth_k:
         assert km is not None

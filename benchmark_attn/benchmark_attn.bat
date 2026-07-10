@@ -6,7 +6,7 @@ REM set SAGEATTN_DEFAULT_PV_ACCUM_DTYPE=fp16
 choice /C yn /M "tune"
 if !errorlevel! equ 1 (goto tune)
 
-%python_embeded_path%\python.exe benchmark_attn.py>benchmark_attn-result.txt
+%python_embeded_path%\python.exe benchmark_attn.py>benchmark_attn-result.txt 2>&1
 goto eof
 
 :tune
