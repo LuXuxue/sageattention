@@ -27,8 +27,9 @@ if env_config_json:
     ]
 elif arch == "gfx1103":
     configs = [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 6}, num_warps=8, num_stages=2), #Ainma
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 3}, num_warps=2, num_stages=1), #SDXL
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'waves_per_eu': 1}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 16, 'waves_per_eu': 0}, num_warps=4, num_stages=1),
     ]
 elif arch == "gfx1035":
     configs = [
@@ -41,7 +42,7 @@ elif arch.startswith("gfx"):
         for bm in [128, 64, 32]
         for bn in [64, 32, 16]
         if bm > bn
-        for waves in [1, 2, 3, 4, 6]
+        for waves in [0, 1, 2, 3, 4, 6]
         for nw in [2, 4, 8]
         for ns in [1, 2, 3, 4]
     ]

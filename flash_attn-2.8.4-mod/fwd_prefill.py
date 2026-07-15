@@ -111,8 +111,8 @@ def get_fwd_prefill_configs(autotune: bool):
                 ]
         elif arch.name == "gfx1103":
             return [
-                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=8, num_stages=2,), #Anima
-                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 4,}, num_warps=4, num_stages=2,), #SDXL
+                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 2,}, num_warps=8, num_stages=2,),
+                triton.Config({"BLOCK_M": 128, "BLOCK_N": 16, "PRE_LOAD_V": False, "waves_per_eu": 0,}, num_warps=4, num_stages=1,),
             ]
         elif arch.name == "gfx1035":
             return [
@@ -149,10 +149,10 @@ def get_fwd_prefill_configs(autotune: bool):
     # ===================== Autotune Sweep =====================
     configs = [
         triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'waves_per_eu': waves, 'PRE_LOAD_V': preload_v,}, num_warps=nw, num_stages=ns)
-    for bm in [128]
+    for bm in [128, 64, 32]
     for bn in [32, 16]
     if bm > bn
-    for waves in [1, 2, 3, 4, 6]
+    for waves in [0, 1, 2, 3, 4, 6]
     for preload_v in [False]
     for nw in [2, 4, 8]
     for ns in [1, 2]

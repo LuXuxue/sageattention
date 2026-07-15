@@ -10,9 +10,9 @@ if !errorlevel! equ 1 (goto tune)
 goto eof
 
 :tune
-ren benchmark_attn-tune.txt benchmark_attn-tune.txt.bak
+echo config,Case,Time,TFLOPS,Backend>benchmark_attn-tune.csv
 for /F "usebackq delims=" %%C in ("benchmark_attn_config.txt") do (
 	set "FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON=%%C"
-	echo !FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON!>>benchmark_attn-tune.txt
-	%python_embeded_path%\python.exe benchmark_attn_tune.py>>benchmark_attn-tune.txt
+	%python_embeded_path%\python.exe benchmark_attn_tune.py>>benchmark_attn-tune.csv
 )
+pause

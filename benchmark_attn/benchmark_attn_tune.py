@@ -4,6 +4,8 @@ import sys
 import os
 
 os.environ['TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL'] = '1'
+env_config_json = os.environ.get('FLASH_ATTENTION_FWD_TRITON_AMD_CONFIG_JSON')
+escaped_json = env_config_json.replace('"', '""')
 
 # ==========================================
 # 1. 导入与兼容性处理
@@ -62,17 +64,28 @@ def benchmark(func, q, k, v, warmup=10, iters=50):
 # ==========================================
 test_cases = [
     # 1. SDXL (MHA: h_q == h_kv)
-    ("SDXL_1", 2, 10, 10, 4096, 4096, 64),
-    ("SDXL_2", 2, 20, 20, 1024, 1024, 64),
-    ("SDXL_3", 2, 10, 10, 9216, 9216, 64),
-    ("SDXL_4", 2, 20, 20, 2304, 2304, 64),
+    ("SDXL01", 1, 10, 10, 4096, 4096, 64),
+    ("SDXL02", 1, 10, 10, 4096, 77, 64),
+    ("SDXL03", 1, 10, 10, 4096, 154, 64),
+    ("SDXL04", 1, 20, 20, 1024, 1024, 64),
+    ("SDXL05", 1, 20, 20, 1024, 77, 64),
+    ("SDXL06", 1, 20, 20, 1024, 154, 64),
+    ("SDXL07", 1, 10, 10, 9216, 9216, 64),
+    ("SDXL08", 1, 10, 10, 9216, 77, 64),
+    ("SDXL09", 1, 10, 10, 9216, 154, 64),
+    ("SDXL10", 1, 20, 20, 2304, 2304, 64),
+    ("SDXL11", 1, 20, 20, 2304, 77, 64),
+    ("SDXL12", 1, 20, 20, 2304, 154, 64),
     
     # 2. Anima (MHA: h_q == h_kv)
-    ("Anima_1", 1, 16, 16, 4096, 4096, 128),
-    ("Anima_2", 1, 16, 16, 9216, 9216, 128),
+    ("Anima01", 1, 16, 16, 4096, 4096, 128),
+    ("Anima02", 1, 16, 16, 4096, 512, 128),
+    ("Anima03", 1, 16, 16, 9216, 9216, 128),
+    ("Anima04", 1, 16, 16, 9216, 512, 128),
     
     # 3. Krea2 (GQA: h_q = 48, h_kv = 12)
-    #("Krea2", 1, 48, 12, 7797, 7797, 128),
+    #("Krea01", 1, 48, 12, 4213, 4213, 128),
+    #("Krea02", 1, 48, 12, 117, 117, 128),
 ]
 
 # ==========================================
@@ -94,7 +107,7 @@ def run_benchmarks():
             
             fa_time = benchmark(fa_func, q, k, v)
             fa_tflops = calculate_tflops(b, h_q, sq, sk, d, fa_time)
-            print(f"{name:<10} | {'FlashAttn':<10} | {fa_tflops:<6.2f}")
+            print(f"\"{escaped_json}\",{name},{fa_time:.3f},{fa_tflops:.2f},FlashAttn")
             
         # --- 测试 SageAttention ---
         if HAS_SAGE:
@@ -106,7 +119,7 @@ def run_benchmarks():
             
             sage_time = benchmark(sage_func, q, k, v)
             sage_tflops = calculate_tflops(b, h_q, sq, sk, d, sage_time)
-            print(f"{name:<10} | {'SageAttn':<10} | {sage_tflops:<6.2f}")
+            print(f"\"{escaped_json}\",{name},{sage_time:.3f},{sage_tflops:.2f},SageAttn")
         
         # 清理显存
         del q, k, v
@@ -114,5 +127,4 @@ def run_benchmarks():
         torch.cuda.empty_cache()
 
 if __name__ == "__main__":
-    print(f"{'Shape':<10} | {'Backend':<10} | {'TFLOPS':<6}")
     run_benchmarks()

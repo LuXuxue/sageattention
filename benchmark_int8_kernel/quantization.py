@@ -1,4 +1,5 @@
-# Put this file in \comfy_kitchen\backends\triton
+# comfy_kitchen-0.2.19
+# this file is in \comfy_kitchen\backends\triton
 
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -809,8 +810,7 @@ def _quantize_rowwise_kernel(
         q_f = x / scale
 
     # Round and Clamp
-    q_i = libdevice.rint(q_f.to(tl.float32)).to(tl.int32)
-    q_i = tl.clamp(q_i, -128.0, 127.0)
+    q_i = tl.clamp(libdevice.rint(q_f.to(tl.float32)), -128.0, 127.0).to(tl.int32)
 
     # 4. Store
     tl.store(y_row_ptr + offsets, q_i.to(tl.int8), mask=mask)
@@ -858,6 +858,7 @@ def triton_quantize_and_rotate_rowwise(x: torch.Tensor, h: torch.Tensor, group_s
     rotated_x = _rotate_activation(x, h, group_size)
     return triton_quantize_rowwise(rotated_x)
 
+
 import os
 import json
 
@@ -871,7 +872,7 @@ if env_config_json:
                 'block_m': env_config['BLOCK_M'],
                 'block_n': env_config['BLOCK_N'],
                 'block_k': env_config['BLOCK_K'],
-                'group_size_m': 8,
+                'group_size_m': env_config['group_size_m'],
                 'waves_per_eu': env_config['waves_per_eu']
             },
             num_warps=env_config['num_warps'],
@@ -881,21 +882,16 @@ if env_config_json:
 else:
     if not AUTOTUNE:
         configs = [
-        triton.Config({'block_m': 64, 'block_n': 64, 'block_k': 128, 'group_size_m': 8, 'waves_per_eu': 1}, num_warps=2, num_stages=2), #Anima01 Anima03
-        triton.Config({'block_m': 128, 'block_n': 256, 'block_k': 128, 'group_size_m': 8, 'waves_per_eu': 1}, num_warps=8, num_stages=2), #Anima04
-        triton.Config({'block_m': 64, 'block_n': 128, 'block_k': 64, 'group_size_m': 8, 'waves_per_eu': 4}, num_warps=4, num_stages=2), #SDXL05
-        triton.Config({'block_m': 64, 'block_n': 64, 'block_k': 64, 'group_size_m': 8, 'waves_per_eu': 4}, num_warps=2, num_stages=2), #SDXL07
-        triton.Config({'block_m': 64, 'block_n': 128, 'block_k': 128, 'group_size_m': 8, 'waves_per_eu': 1}, num_warps=8, num_stages=2), #SDXL08
-        triton.Config({'block_m': 64, 'block_n': 256, 'block_k': 64, 'group_size_m': 8, 'waves_per_eu': 3}, num_warps=4, num_stages=2), #SDXL11
-        triton.Config({'block_m': 64, 'block_n': 256, 'block_k': 64, 'group_size_m': 8, 'waves_per_eu': 2}, num_warps=8, num_stages=2), #SDXL12
+        triton.Config({'block_m': 64, 'block_n': 64, 'block_k': 128, 'group_size_m': 4, 'waves_per_eu': 1}, num_warps=2, num_stages=2),
         ]
     else:
         configs = [
-            triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'BLOCK_K': bk, 'group_size_m': 8, 'waves_per_eu': waves}, num_warps=nw, num_stages=ns)
+            triton.Config({'BLOCK_M': bm, 'BLOCK_N': bn, 'BLOCK_K': bk, 'group_size_m': gs, 'waves_per_eu': waves}, num_warps=nw, num_stages=ns)
             for bm in [128, 64]
             for bn in [256, 128, 64]
             for bk in [128, 64]
-            for waves in [1, 2, 3, 4, 6]
+            for gs in [4, 8]
+            for waves in [0, 1, 2, 3, 4]
             for nw in [2, 4, 8]
             for ns in [2]
         ]
@@ -904,7 +900,6 @@ else:
     list(configs),
     key=['m', 'n', 'k'],
 )
-
 @triton.jit
 def _int8_matmul_dequant_kernel(
     # Pointers
@@ -980,7 +975,6 @@ def _int8_matmul_dequant_kernel(
     list(configs),
     key=['m', 'n', 'k'],
 )
-
 @triton.jit
 def _int8_matmul_dequant_per_row_kernel(
     # Pointers
