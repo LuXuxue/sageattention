@@ -1,0 +1,83 @@
+[*] 识别到 36 个可覆盖 Case，0 个长尾孤岛 Case。
+
+--- 按【延迟影响力】贪心挑选核心 Config ---
+
+==========================================================================================
+按【延迟影响力】排序的 Config 完备列表 (阈值: 5%)
+==========================================================================================
+
+[01] Config JSON: {"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 26 个 Case (累计覆盖总延迟权重的 98.9%)
+         - Anima08 (基准延迟: 103.0574ms)
+         - Anima07 (基准延迟: 97.6367ms)
+         - Anima04 (基准延迟: 45.7768ms)
+         - Anima03 (基准延迟: 42.9439ms)
+         - Anima06 (基准延迟: 24.1728ms)
+         - Anima10 (基准延迟: 23.9255ms)
+         - SDXL14 (基准延迟: 18.4022ms)
+         - SDXL17 (基准延迟: 18.0539ms)
+         - LLM04 (基准延迟: 14.2995ms)
+         - LLM03 (基准延迟: 14.2533ms)
+         - Anima01 (基准延迟: 10.7464ms)
+         - SDXL18 (基准延迟: 10.1068ms)
+         - SDXL15 (基准延迟: 9.3213ms)
+         - SDXL07 (基准延迟: 8.1774ms)
+         - SDXL11 (基准延迟: 8.1767ms)
+         - LLM02 (基准延迟: 4.8158ms)
+         - SDXL12 (基准延迟: 4.6297ms)
+         - SDXL08 (基准延迟: 4.2269ms)
+         - SDXL13 (基准延迟: 2.3750ms)
+         - SDXL16 (基准延迟: 2.3279ms)
+         - LLM08 (基准延迟: 1.6067ms)
+         - LLM01 (基准延迟: 1.2942ms)
+         - SDXL05 (基准延迟: 1.1399ms)
+         - SDXL09 (基准延迟: 1.0937ms)
+         - Anima02 (基准延迟: 0.8554ms)
+         - SDXL10 (基准延迟: 0.4659ms)
+
+[02] Config JSON: {"BLOCK_M":64,"BLOCK_N":64,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":0,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 4 个 Case (累计覆盖总延迟权重的 99.5%)
+         - Anima09 (基准延迟: 1.3486ms)
+         - Anima05 (基准延迟: 0.6510ms)
+         - LLM05 (基准延迟: 0.3503ms)
+         - SDXL01 (基准延迟: 0.2735ms)
+
+[03] Config JSON: {"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":128,"group_size_m":4,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 2 个 Case (累计覆盖总延迟权重的 99.9%)
+         - LLM07 (基准延迟: 1.4447ms)
+         - LLM06 (基准延迟: 0.6254ms)
+
+[04] Config JSON: {"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":128,"group_size_m":4,"waves_per_eu":0,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 1 个 Case (累计覆盖总延迟权重的 99.9%)
+         - SDXL06 (基准延迟: 0.2529ms)
+
+[05] Config JSON: {"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":0,"num_warps":4,"num_stages":2}
+     |-> 核心贡献: 新覆盖 1 个 Case (累计覆盖总延迟权重的 100.0%)
+         - SDXL02 (基准延迟: 0.1362ms)
+
+[06] Config JSON: {"BLOCK_M":64,"BLOCK_N":64,"BLOCK_K":128,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 1 个 Case (累计覆盖总延迟权重的 100.0%)
+         - SDXL03 (基准延迟: 0.0627ms)
+
+[07] Config JSON: {"BLOCK_M":128,"BLOCK_N":64,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+     |-> 核心贡献: 新覆盖 1 个 Case (累计覆盖总延迟权重的 100.0%)
+         - SDXL04 (基准延迟: 0.0560ms)
+
+==========================================================================================
+Trade-off 截断建议 (自由选取列表长度，平衡 Autotune 耗时与最终性能)
+==========================================================================================
+- 选取前 [ 1] 条 Config: 可覆盖 98.9% 的总体延迟权重 (保障核心高延迟业务)
+- 选取前 [ 1] 条 Config: 可覆盖 98.9% 的总体延迟权重 (保障核心高延迟业务)
+- 选取前 [ 1] 条 Config: 可覆盖 98.9% 的总体延迟权重 (保障核心高延迟业务)
+- 选取前 [ 2] 条 Config: 可覆盖 99.5% 的总体延迟权重 (保障核心高延迟业务)
+
+==========================================================================================
+纯净 Config 列表 (按重要性排序，可直接复制入代码截断使用):
+==========================================================================================
+{"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+{"BLOCK_M":64,"BLOCK_N":64,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":0,"num_warps":2,"num_stages":2}
+{"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":128,"group_size_m":4,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+{"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":128,"group_size_m":4,"waves_per_eu":0,"num_warps":2,"num_stages":2}
+{"BLOCK_M":64,"BLOCK_N":128,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":0,"num_warps":4,"num_stages":2}
+{"BLOCK_M":64,"BLOCK_N":64,"BLOCK_K":128,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
+{"BLOCK_M":128,"BLOCK_N":64,"BLOCK_K":64,"group_size_m":8,"waves_per_eu":1,"num_warps":2,"num_stages":2}
